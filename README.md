@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/ai-excited-01/xantuyz/ai-excited-01/rank.svg)](https://make.fun/bounty/ai-excited-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 [![reward](https://make.fun/badge/ai-excited-01/xantuyz/ai-excited-01/reward.svg)](https://make.fun/bounty/ai-excited-01?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 
-Frame-Break Koi: in a hushed museum gallery, a giant orange-and-white koi smashes out of its gilded frame and lunges toward the viewer as water and splinters fly, while two tiny visitors duck below — one impossible moment, one huge focal point, pure momentum.
+Frame-Break Koi: a giant orange-and-white koi bursts out of its gilt-framed painting into a quiet museum gallery, shattering the frame as water and splinters fly and two tiny visitors duck for cover — the impossible moment, frozen mid-explosion.
 
 ## Run it
 

@@ -1,21 +1,15 @@
-#!/usr/bin/env python3
 """ai-excited-01 — Frame-Break Koi.
 
 Copies the pre-rendered entry image (entry.png, sitting next to this
-script) into the output directory required by make.fun and verifies the
-copy byte-for-byte before exiting.
+script) into the make.fun output directory and verifies the copy.
 
-Usage:
-    mkdir -p out && MAKEFUN_OUTPUT_DIR=out python3 main.py
-
-The entry image itself is a fixed asset: this script performs no image
-generation, no network access, and no randomness, so repeated runs
-produce byte-identical output.
+Deterministic: the output is a byte-for-byte copy of the source image,
+so repeated runs always produce identical bytes. No network access,
+no randomness, standard library only.
 """
 
 import hashlib
 import os
-import shutil
 import struct
 import sys
 import zlib
@@ -26,104 +20,97 @@ EXPECTED_HEIGHT = 1024
 MAX_BYTES = 1 * 1024 * 1024  # 1 MiB
 
 
-def sha256_of(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def fail(message):
+    print(f"ERROR: {message}", file=sys.stderr)
+    sys.exit(1)
 
 
-def png_dimensions(path):
-    """Return (width, height) of a PNG file, verifying its signature."""
-    with open(path, "rb") as handle:
-        header = handle.read(33)
-    if len(header) < 33 or header[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError("not a PNG file (bad signature)")
-    length, chunk_type = struct.unpack(">I4s", header[8:16])
-    if chunk_type != b"IHDR" or length != 13:
-        raise ValueError("not a PNG file (missing IHDR chunk)")
-    width, height = struct.unpack(">II", header[16:24])
+def read_png_dimensions(data):
+    """Return (width, height) from a PNG byte string, or None."""
+    if len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    if data[12:16] != b"IHDR":
+        return None
+    width, height = struct.unpack(">II", data[16:24])
     return width, height
 
 
-def png_chunks_valid(path):
-    """Walk the PNG chunk list and check every CRC."""
-    with open(path, "rb") as handle:
-        data = handle.read()
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError("not a PNG file (bad signature)")
+def check_png_crc(data):
+    """Verify the CRC of every PNG chunk; return the bad chunk type or None."""
     pos = 8
-    saw_iend = False
     while pos + 8 <= len(data):
-        length, chunk_type = struct.unpack(">I4s", data[pos:pos + 8])
-        end = pos + 8 + length + 4
-        if end > len(data):
-            raise ValueError("truncated PNG chunk: %r" % chunk_type)
-        stored_crc, = struct.unpack(">I", data[pos + 8 + length:end])
-        actual_crc = zlib.crc32(chunk_type + data[pos + 8:pos + 8 + length])
-        if stored_crc != (actual_crc & 0xFFFFFFFF):
-            raise ValueError("bad CRC in PNG chunk: %r" % chunk_type)
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        chunk_type = data[pos + 4:pos + 8]
+        chunk_end = pos + 8 + length
+        if chunk_end + 4 > len(data):
+            return chunk_type
+        stored_crc = struct.unpack(">I", data[chunk_end:chunk_end + 4])[0]
+        actual_crc = zlib.crc32(chunk_type + data[pos + 8:chunk_end]) & 0xFFFFFFFF
+        if stored_crc != actual_crc:
+            return chunk_type
+        pos = chunk_end + 4
         if chunk_type == b"IEND":
-            saw_iend = True
             break
-        pos = end
-    if not saw_iend:
-        raise ValueError("PNG missing IEND chunk")
-    return True
+    return None
 
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     source = os.path.join(here, SOURCE_NAME)
+
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    os.makedirs(out_dir, exist_ok=True)
-    destination = os.path.join(out_dir, SOURCE_NAME)
+    dest = os.path.join(out_dir, SOURCE_NAME)
 
     if not os.path.isfile(source):
-        print("error: source image not found: %s" % source, file=sys.stderr)
-        return 1
+        fail(f"source image not found: {source}")
 
-    source_size = os.path.getsize(source)
-    if source_size > MAX_BYTES:
-        print("error: source image %d bytes exceeds 1 MiB" % source_size,
-              file=sys.stderr)
-        return 1
-    try:
-        src_w, src_h = png_dimensions(source)
-        png_chunks_valid(source)
-    except ValueError as exc:
-        print("error: source image invalid: %s" % exc, file=sys.stderr)
-        return 1
-    if (src_w, src_h) != (EXPECTED_WIDTH, EXPECTED_HEIGHT):
-        print("error: source is %dx%d, expected 1024x1024" % (src_w, src_h),
-              file=sys.stderr)
-        return 1
+    with open(source, "rb") as fh:
+        data = fh.read()
 
-    shutil.copyfile(source, destination)
+    if len(data) == 0:
+        fail("source image is empty")
+    if len(data) > MAX_BYTES:
+        fail(f"source image is {len(data)} bytes, over the 1 MiB limit")
 
-    # --- verify the copy ---
-    if not os.path.isfile(destination):
-        print("error: output image missing: %s" % destination, file=sys.stderr)
-        return 1
-    if os.path.getsize(destination) != source_size:
-        print("error: output size differs from source", file=sys.stderr)
-        return 1
-    if sha256_of(destination) != sha256_of(source):
-        print("error: output sha256 differs from source", file=sys.stderr)
-        return 1
-    width, height = png_dimensions(destination)
-    if (width, height) != (EXPECTED_WIDTH, EXPECTED_HEIGHT):
-        print("error: expected 1024x1024, got %dx%d" % (width, height),
-              file=sys.stderr)
-        return 1
-    png_chunks_valid(destination)
+    dims = read_png_dimensions(data)
+    if dims is None:
+        fail("source image is not a valid PNG")
+    if dims != (EXPECTED_WIDTH, EXPECTED_HEIGHT):
+        fail(f"source image is {dims[0]}x{dims[1]}, expected "
+             f"{EXPECTED_WIDTH}x{EXPECTED_HEIGHT}")
 
-    print("wrote %s (%d bytes, %dx%d, sha256 %s)"
-          % (destination, source_size, width, height,
-             sha256_of(destination)))
-    return 0
+    bad_chunk = check_png_crc(data)
+    if bad_chunk is not None:
+        fail(f"PNG CRC check failed on chunk {bad_chunk!r}")
+
+    source_sha = hashlib.sha256(data).hexdigest()
+
+    os.makedirs(out_dir, exist_ok=True)
+    with open(dest, "wb") as fh:
+        fh.write(data)
+
+    with open(dest, "rb") as fh:
+        copied = fh.read()
+
+    if len(copied) != len(data):
+        fail(f"output size {len(copied)} != source size {len(data)}")
+    if hashlib.sha256(copied).hexdigest() != source_sha:
+        fail("output sha256 does not match source sha256")
+    # Re-verify the bytes actually on disk, not just the in-memory copy:
+    # dimensions and per-chunk CRCs must still hold after the write.
+    if read_png_dimensions(copied) != (EXPECTED_WIDTH, EXPECTED_HEIGHT):
+        fail("output PNG dimensions changed after copy")
+    bad_chunk = check_png_crc(copied)
+    if bad_chunk is not None:
+        fail(f"output PNG CRC check failed on chunk {bad_chunk!r}")
+    if b"IEND" not in copied[-12:]:
+        fail("output PNG is truncated (no IEND trailer)")
+
+    print(f"Wrote {dest}")
+    print(f"bytes: {len(copied)}")
+    print(f"sha256: {source_sha}")
+    print(f"dimensions: {dims[0]}x{dims[1]}")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
